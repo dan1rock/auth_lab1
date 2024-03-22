@@ -5,12 +5,14 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const port = 3000;
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 const SESSION_KEY = 'Authorization';
+const JWT_SECRET_KEY = 'SECRET';
 
 class Session {
     #sessions = {}
@@ -60,34 +62,48 @@ const sessions = new Session();
 
 app.use((req, res, next) => {
     let currentSession = {};
-    let sessionId = req.get(SESSION_KEY);
+    let jwtToken = req.get(SESSION_KEY);
 
-    if (sessionId) {
-        currentSession = sessions.get(sessionId);
-        if (!currentSession) {
-            currentSession = {};
-            sessionId = sessions.init(res);
+    if (jwtToken) {
+        try {
+            jwt.verify(jwtToken, JWT_SECRET_KEY);
+            currentSession = sessions.get(jwtToken);
+            if (!currentSession) {
+                currentSession = {};
+                jwtToken = sessions.init(res);
+            }
+        } catch (err) {
+            jwtToken = sessions.init(res);
         }
     } else {
-        sessionId = sessions.init(res);
+        jwtToken = sessions.init(res);
     }
 
     req.session = currentSession;
-    req.sessionId = sessionId;
+    req.sessionId = jwtToken;
 
     onFinished(req, () => {
         const currentSession = req.session;
-        const sessionId = req.sessionId;
-        sessions.set(sessionId, currentSession);
+        const jwtToken = req.sessionId;
+        sessions.set(jwtToken, currentSession);
     });
 
     next();
-});
+})
 
-app.get('/', (req, res) => {
-    if (req.session.username) {
+const authenticateJWT = (req, res, next) => {
+    const token = req.headers.authorization;
+
+    jwt.verify(token, JWT_SECRET_KEY, (err, decoded) => {
+        req.user = decoded;
+        next();
+    });
+};
+
+app.get('/', authenticateJWT, (req, res) => {
+    if (req.user) {
         return res.json({
-            username: req.session.username,
+            username: req.user.username,
             logout: 'http://localhost:3000/logout'
         })
     }
@@ -125,8 +141,9 @@ app.post('/api/login', (req, res) => {
     if (user) {
         req.session.username = user.username;
         req.session.login = user.login;
+        const jwtToken = jwt.sign({ username: user.username }, JWT_SECRET_KEY);
 
-        res.json({ token: req.sessionId });
+        res.json({ username: user.username, token: jwtToken });
     }
 
     res.status(401).send();

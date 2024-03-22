@@ -125,12 +125,18 @@
             token = JSON.parse(session).token;
         } catch(e) {}
 
+        const loginForm = document.getElementById("login-form");
+        const loginButton = document.getElementById("login-form-submit");
+        const loginErrorMsg = document.getElementById("login-error-msg");
+        const logoutLink =  document.getElementById("logout");
+
         if (token) {
             axios.get('/', {
                 headers: {
                     Authorization: token
                 }
             }).then((response) => {
+                console.log(response.data.toString())
                 const { username } = response.data;
 
                 if (username) {
@@ -144,14 +150,10 @@
                     mainHolder.append(`Hello ${username}`);
                     logoutLink.style.opacity = 1;
                 }
+            }).catch((error) => {
+                console.error('Error fetching user data:', error);
             });
         }
-
-
-        const loginForm = document.getElementById("login-form");
-        const loginButton = document.getElementById("login-form-submit");
-        const loginErrorMsg = document.getElementById("login-error-msg");
-        const logoutLink =  document.getElementById("logout");
 
         logoutLink.addEventListener("click", (e) => {
             e.preventDefault();
