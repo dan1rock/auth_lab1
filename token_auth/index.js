@@ -6,6 +6,7 @@ const path = require('path');
 const port = 3000;
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const jwksClient = require('jwks-rsa');
 const axios = require('axios');
 
 const app = express();
@@ -64,6 +65,21 @@ class Session {
 
 const sessions = new Session();
 
+// Функція, що отримує ключ Auth0
+const getPublicKey = (header, callback) => {
+    const client = jwksClient({
+        jwksUri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`
+    });
+    client.getSigningKey(header.kid, (err, key) => {
+        if (err) {
+            callback(err);
+        } else {
+            const signingKey = key.publicKey || key.rsaPublicKey;
+            callback(null, signingKey);
+        }
+    });
+};
+
 app.use((req, res, next) => {
     let currentSession = {};
     let sessionId = req.get(SESSION_KEY);
@@ -88,32 +104,42 @@ app.use((req, res, next) => {
     });
 
     if (req.session.access_token && req.session.refresh_token) {
-        const accessToken = jwt.decode(req.session.access_token);
-        const currentTime = Math.floor(Date.now() / 1000);
+        const accessToken = req.session.access_token;
+        const refreshToken = req.session.refresh_token;
 
-        if (accessToken.exp < currentTime) {
-            axios.post('http://localhost:3000/api/refreshToken', {
-                refresh_token: req.session.refresh_token
-            })
-                .then(response => {
-                    req.session.access_token = response.data.access_token;
-                    req.session.refresh_token = response.data.refresh_token;
+        jwt.verify(accessToken, getPublicKey, (err, decoded) => {
+            if (err) {
+                console.error('Invalid access token:', err);
+                return res.status(401).send('Invalid access token');
+            } else {
+                const currentTime = Math.floor(Date.now() / 1000);
+
+                if (decoded.exp < currentTime) {
+                    // Токен прострочений, необхідно оновити
+                    axios.post('http://localhost:3000/api/refreshToken', {
+                        refresh_token: refreshToken
+                    })
+                        .then(response => {
+                            req.session.access_token = response.data.access_token;
+                            req.session.refresh_token = response.data.refresh_token;
+                            next();
+                        })
+                        .catch(error => {
+                            console.error('Token refresh failed:', error.response ? error.response.data : error.message);
+                            res.status(401).send('Token refresh failed');
+                        });
+                } else {
                     next();
-                })
-                .catch(error => {
-                    console.error('Token refresh failed:', error.response ? error.response.data : error.message);
-                    res.status(401).send('Token refresh failed');
-                });
-        } else {
-            next();
-        }
+                }
+            }
+        });
     } else {
         next();
     }
 })
 
 app.get('/', (req, res) => {
-    if (req.session.username) {
+    if (req.session.access_token) {
         return res.json({
             username: req.session.username,
             logout: 'http://localhost:3000/logout'
@@ -149,11 +175,7 @@ app.post('/api/login', async (req, res) => {
 
         res.json({ token: req.sessionId });
     } catch (error) {
-        if (error.response && error.response.data) {
-            console.error('Login failed:', error.response.data);
-        } else {
-            console.error('Login failed:', error.message);
-        }
+        console.error('Login failed:', error.response ? error.response.data : error.message);
         res.status(401).send('Login failed');
     }
 });
