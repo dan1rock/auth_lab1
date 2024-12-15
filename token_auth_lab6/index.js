@@ -13,8 +13,6 @@ const app = express();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-const SESSION_KEY = 'Authorization';
-
 const AUTH0_DOMAIN = 'danylo.eu.auth0.com';
 const AUTH0_CLIENT_ID = 'RhGEaZ2CjYpuHfAR7gz3BxF7Fk59Bkbh';
 const AUTH0_CLIENT_SECRET = 'eui8xIPZjM8Edq3RbqhX6pWxgGfZfuzj9xDm4yKX9-LsOjnqh7CWbJGe6Z8n4J_T';
@@ -78,18 +76,23 @@ const getPublicKey = (header, callback) => {
     });
 };
 
+const cookieParser = require('cookie-parser');
+app.use(cookieParser());
+
 app.use((req, res, next) => {
     let currentSession = {};
-    let sessionId = req.get(SESSION_KEY);
+    let sessionId = req.cookies.sessionId;
 
     if (sessionId) {
         currentSession = sessions.get(sessionId);
         if (!currentSession) {
             currentSession = {};
             sessionId = sessions.init(res);
+            res.cookie('sessionId', sessionId, { httpOnly: true });
         }
     } else {
         sessionId = sessions.init(res);
+        res.cookie('sessionId', sessionId, { httpOnly: true });
     }
 
     req.session = currentSession;
@@ -138,32 +141,24 @@ app.use((req, res, next) => {
 
 // Main page route
 app.get('/', (req, res) => {
+    return res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+app.get('/api/userinfo', (req, res) => {
     if (req.session.access_token) {
         return res.json({
             username: req.session.username,
-            logout: 'http://localhost:3000/logout'
+            logout: 'http://localhost:3000/api/logout'
         });
+    } else {
+        return res.status(401).json({ error: 'Not authenticated' });
     }
-
-    // Redirect to the Auth0 login page if not authenticated
-    const redirectParams = new URLSearchParams({
-        response_type: 'code',
-        client_id: AUTH0_CLIENT_ID,
-        redirect_uri: `http://localhost:${port}/callback`,
-        scope: 'openid profile email',
-        state: uuid.v4()
-    });
-
-    const redirectURL = `https://${AUTH0_DOMAIN}/authorize?${redirectParams}`;
-
-    console.log("Redirect URL:", redirectURL);
-
-    res.redirect(redirectURL);
 });
 
 // Logout route
-app.get('/logout', (req, res) => {
+app.get('/api/logout', (req, res) => {
     sessions.destroy(req, res);
+    res.clearCookie('sessionId');
     res.redirect('/');
 });
 
@@ -202,23 +197,18 @@ app.get('/callback', async (req, res) => {
 });
 
 // Login route (redirect to Auth0)
-// app.post('/api/login', async (req, res) => {
-//     const { login, password } = req.body;
-//
-//     const redirectParams = new URLSearchParams({
-//         response_type: 'code',
-//         client_id: AUTH0_CLIENT_ID,
-//         redirect_uri: `http://localhost:${port}/callback`,
-//         scope: 'openid profile email',
-//         state: uuid.v4()
-//     });
-//
-//     const redirectURL = `https://${AUTH0_DOMAIN}/authorize?${redirectParams}`;
-//
-//     console.log("Redirect URL:", redirectURL);
-//
-//     res.redirect(redirectURL);
-// });
+app.get('/api/login', (req, res) => {
+    const redirectParams = new URLSearchParams({
+        response_type: 'code',
+        client_id: AUTH0_CLIENT_ID,
+        redirect_uri: `http://localhost:${port}/callback`,
+        scope: 'openid profile email',
+        state: uuid.v4()
+    });
+
+    const redirectURL = `https://${AUTH0_DOMAIN}/authorize?${redirectParams}`;
+    res.json({ redirectURL });
+});
 
 // Refresh token route
 app.post('/api/refreshToken', async (req, res) => {
