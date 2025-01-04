@@ -1,8 +1,12 @@
 const crypto = require('crypto');
 const net = require('net');
+const tls = require('tls');
 const fs = require('fs');
+const path = require("path");
 
-const caCertificate = fs.readFileSync('cert.pem', 'utf8');
+const caCertificate = fs.readFileSync(path.join(__dirname, 'ssl', 'rootCA.pem'), 'utf8');
+const clientCertificate = fs.readFileSync(path.join(__dirname, 'ssl', 'client.crt'), 'utf8');
+const privateKey = fs.readFileSync(path.join(__dirname, 'ssl', 'client.key'), 'utf8');
 const clientRandom = crypto.randomBytes(16);
 
 const client = net.createConnection({ port: 8080 }, () => {
@@ -13,7 +17,7 @@ const client = net.createConnection({ port: 8080 }, () => {
 
 let sessionKey;
 
-client.on('data', (data) => {
+client.on('data', async (data) => {
     const [type, payload1, payload2, payload3] = data.toString().split(':');
 
     if (type === 'HELLO_SERVER') {
@@ -24,7 +28,9 @@ client.on('data', (data) => {
         const serverPublicKey = payload2;
         const serverCertificate = payload3;
 
-        if (serverCertificate !== caCertificate) {
+        const isValid = await validateCertificate(serverCertificate);
+
+        if (!isValid) {
             console.error('Client: Server certificate validation failed!');
             client.end();
             return;
@@ -54,9 +60,62 @@ client.on('data', (data) => {
         encryptedMessage = Buffer.concat([encryptedMessage, cipher.final()]);
 
         client.write(`MESSAGE:${iv.toString('hex')},${encryptedMessage.toString('hex')}`);
+
+        console.log('Client: Sent "Hello, secure world!" through secure channel.');
+
+        client.end();
     }
 });
 
 client.on('end', () => {
     console.log('Client: Disconnected from server.');
 });
+
+const validateCertificate = (serverCertificate) => {
+    return new Promise((resolve) => {
+        const validationOptions = {
+            host: 'localhost',
+            port: 8443,
+            key: privateKey,
+            cert: clientCertificate,
+            ca: caCertificate,
+            rejectUnauthorized: true,
+        };
+
+        const validationClient = tls.connect(validationOptions, () => {
+            console.log('Client: Connected to validation server on port 8443.');
+
+            if (!validationClient.authorized) {
+                console.error('Client: Validation server certificate validation failed.');
+                validationClient.end();
+                resolve(false);
+                return;
+            }
+
+            console.log('Client: Validation server certificate is valid.');
+
+            validationClient.write(`VALIDATE:${serverCertificate}`);
+        });
+
+        validationClient.on('data', (data) => {
+            const response = data.toString();
+            if (response === 'VALID') {
+                console.log('Client: Server certificate validated by the validation server.');
+                resolve(true);
+            } else {
+                console.error('Client: Server certificate rejected by the validation server.');
+                resolve(false);
+            }
+            validationClient.end();
+        });
+
+        validationClient.on('end', () => {
+            console.log('Client: Disconnected from validation server.');
+        });
+
+        validationClient.on('error', (err) => {
+            console.error(`Validation Client Error: ${err.message}`);
+            resolve(false);
+        });
+    });
+}

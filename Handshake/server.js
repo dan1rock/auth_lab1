@@ -1,13 +1,10 @@
 const crypto = require('crypto');
 const net = require('net');
 const fs = require('fs');
+const path = require("path");
 
-// const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
-//     modulusLength: 2048,
-// });
-
-const serverCertificate = fs.readFileSync('cert.pem', 'utf8');
-const privateKey = fs.readFileSync('private.key', 'utf8');
+const serverCertificate = fs.readFileSync(path.join(__dirname, 'ssl', 'server.crt'), 'utf8');
+const privateKey = fs.readFileSync(path.join(__dirname, 'ssl', 'server.key'), 'utf8');
 
 const serverRandom = crypto.randomBytes(16);
 let sessionKey;
@@ -41,7 +38,7 @@ const server = net.createServer((socket) => {
         } else if (type === 'MESSAGE') {
             const [ivHex, encryptedMessageHex] = payload.split(',');
             const iv = Buffer.from(ivHex, 'hex');
-            const encryptedMessage = Buffer.from(encryptedMessageHex, 'hex');
+            const encryptedMessage = Buffer.from(encryptedMessageHex, 'hex'); 
 
             try {
                 const decipher = crypto.createDecipheriv('aes-128-cbc', sessionKey, iv);
