@@ -47,7 +47,15 @@ const server = net.createServer((socket) => {
             console.log(`Node ${nodeId} (Server): Generated session key: ${sessionKey.toString('hex')}`);
             const connectionId = `${socket.remoteAddress}:${socket.remotePort}`;
             sessionKeys[connectionId] = sessionKey;
-            socket.write('READY');
+
+            const iv = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-128-cbc', sessionKey, iv);
+            let encryptedMessage = cipher.update(`READY`, 'utf8');
+            encryptedMessage = Buffer.concat([encryptedMessage, cipher.final()]);
+
+            socket.write(`MESSAGE:${iv.toString('hex')},${encryptedMessage.toString('hex')}`);
+            console.log(`Node ${nodeId} (Server): Sent "READY" through secure channel.`);
+
         } else if (type === 'MESSAGE') {
             const [ivHex, encryptedMessageHex] = payload1.split(',');
             const iv = Buffer.from(ivHex, 'hex');
@@ -58,7 +66,12 @@ const server = net.createServer((socket) => {
                 const decipher = crypto.createDecipheriv('aes-128-cbc', sessionKeys[connectionId], iv);
                 let decryptedMessage = decipher.update(encryptedMessage, null, 'utf8');
                 decryptedMessage += decipher.final('utf8');
-                console.log(`Node ${nodeId} (Server): Decrypted message: ${decryptedMessage}`);
+
+                if (decryptedMessage === 'READY') {
+                    console.log(`Node ${nodeId} (Server): Client is ready for secure communication.`);
+                } else {
+                    console.log(`Node ${nodeId} (Server): Decrypted message: ${decryptedMessage}`);
+                }
             } catch (err) {
                 console.error(`Node ${nodeId} (Server): Decryption failed: ${err.message}`);
             }
@@ -84,7 +97,7 @@ const rl = readline.createInterface({
 const connectToNode = (targetNodeId) => {
     const targetPort = 8000 + parseInt(targetNodeId);
     const clientRandom = crypto.randomBytes(16);
-    let serverRandom, sessionKey;
+    let sessionKey;
 
     const client = net.createConnection({ port: targetPort }, () => {
         console.log('Client: Connected to server.');
@@ -125,28 +138,51 @@ const connectToNode = (targetNodeId) => {
                 .slice(0, 16);
 
             console.log(`Client: Generated session key: ${sessionKey.toString('hex')}`);
-        } else if (type === 'READY') {
-            console.log('Client: Server is ready for secure communication.');
-            console.log('Type your message below or type "!end" to close the connection.');
 
-            const sendMessage = (message) => {
-                if (message.trim() === '!end') {
-                    console.log('Client: Closing connection...');
-                    rl.removeListener('line', sendMessage);
-                    client.end();
-                    return;
+            const iv = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-128-cbc', sessionKey, iv);
+            let encryptedMessage = cipher.update(`READY`, 'utf8');
+            encryptedMessage = Buffer.concat([encryptedMessage, cipher.final()]);
+
+            client.write(`MESSAGE:${iv.toString('hex')},${encryptedMessage.toString('hex')}`);
+            console.log(`Client: Sent "READY" through secure channel.`);
+        }
+        else if (type === 'MESSAGE') {
+            const [ivHex, encryptedMessageHex] = payload1.split(',');
+            const iv = Buffer.from(ivHex, 'hex');
+            const encryptedMessage = Buffer.from(encryptedMessageHex, 'hex');
+
+            try {
+                const decipher = crypto.createDecipheriv('aes-128-cbc', sessionKey, iv);
+                let decryptedMessage = decipher.update(encryptedMessage, null, 'utf8');
+                decryptedMessage += decipher.final('utf8');
+
+                if (decryptedMessage === 'READY') {
+                    console.log('Client: Server is ready for secure communication.');
+                    console.log('Type your message below or type "!end" to close the connection.');
+
+                    const sendMessage = (message) => {
+                        if (message.trim() === '!end') {
+                            console.log('Client: Closing connection...');
+                            rl.removeListener('line', sendMessage);
+                            client.end();
+                            return;
+                        }
+
+                        const iv = crypto.randomBytes(16);
+                        const cipher = crypto.createCipheriv('aes-128-cbc', sessionKey, iv);
+                        let encryptedMessage = cipher.update(`(node${nodeId}) ${message}`, 'utf8');
+                        encryptedMessage = Buffer.concat([encryptedMessage, cipher.final()]);
+
+                        client.write(`MESSAGE:${iv.toString('hex')},${encryptedMessage.toString('hex')}`);
+                        console.log(`Client: Sent "${message}" through secure channel.`);
+                    };
+
+                    rl.on('line', sendMessage);
                 }
-
-                const iv = crypto.randomBytes(16);
-                const cipher = crypto.createCipheriv('aes-128-cbc', sessionKey, iv);
-                let encryptedMessage = cipher.update(`(node${nodeId}) ${message}`, 'utf8');
-                encryptedMessage = Buffer.concat([encryptedMessage, cipher.final()]);
-
-                client.write(`MESSAGE:${iv.toString('hex')},${encryptedMessage.toString('hex')}`);
-                console.log(`Client: Sent "${message}" through secure channel.`);
-            };
-
-            rl.on('line', sendMessage);
+            } catch (err) {
+                console.error(`Client: Decryption failed: ${err.message}`);
+            }
         }
     });
 
